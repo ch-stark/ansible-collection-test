@@ -1,0 +1,49 @@
+# FIXED: These tasks now use explicit host/auth details
+
+    - name: Get all VirtualMachineInstances (VMIs) across all namespaces
+      community.kubernetes.k8s_info:
+        api_version: kubevirt.io/v1      # KubeVirt API version
+        kind: VirtualMachineInstance       # List running instances
+        host: "{{ cluster_proxy.cluster_url }}" # <--- ADD THIS
+        validate_certs: no                 # <--- ADD THIS (match your example)
+        api_key: "{{ managed_serviceaccount.token }}" # <--- ADD THIS
+      register: vmi_list
+      # Add error handling in case the connection fails
+      ignore_errors: yes # Or use a block/rescue
+
+    - name: DEBUG - Show raw VMI list
+      ansible.builtin.debug:
+        var: vmi_list
+      when: vmi_list is defined and not vmi_list.failed # Only show if k8s_info worked
+
+    - name: Get all VirtualMachines (VMs)
+      community.kubernetes.k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        host: "{{ cluster_proxy.cluster_url }}" # <--- ADD THIS
+        validate_certs: no                 # <--- ADD THIS
+        api_key: "{{ managed_serviceaccount.token }}" # <--- ADD THIS
+      register: vm_list
+      # Add error handling in case the connection fails
+      ignore_errors: yes # Or use a block/rescue
+
+    - name: DEBUG - Show raw VM list
+      ansible.builtin.debug:
+        var: vm_list
+      when: vm_list is defined and not vm_list.failed # Only show if k8s_info worked
+
+    - name: Print VMI details
+      ansible.builtin.debug:
+        msg: "Found VMI '{{ item.metadata.name }}' in namespace '{{ item.metadata.namespace }}' with IP '{{ (item.status.interfaces | selectattr('ipAddress', 'defined') | map(attribute='ipAddress') | first) | default('N/A') }}'"
+      loop: "{{ vmi_list.resources | default([]) }}" # Add default([]) in case k8s_info failed or found nothing
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: vmi_list is defined and not vmi_list.failed and vmi_list.resources is defined
+
+    - name: Print VM names and status
+      ansible.builtin.debug:
+        msg: "Found VM '{{ item.metadata.name }}' in namespace '{{ item.metadata.namespace }}', Status: {{ item.status.printableStatus | default('N/A') }}"
+      loop: "{{ vm_list.resources | default([]) }}" # Add default([]) in case k8s_info failed or found nothing
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: vm_list is defined and not vm_list.failed and vm_list.resources is defined
