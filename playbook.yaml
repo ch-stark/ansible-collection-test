@@ -1,0 +1,382 @@
+---
+- name: Setup AAP Demo Resources via URI
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    # --- Look up environment variables ---
+    aap_host: "{{ lookup('env', 'CONTROLLER_HOST') }}"
+    aap_token: "{{ lookup('env', 'CONTROLLER_TOKEN') }}"
+    kubeconfig_path: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}"
+
+    # --- API Base Path ---
+    api_base: "{{ aap_host }}/api/v2" # Corrected API base path (usually /api/v2)
+    api_base: "https://aap-25-bu-aap.apps.rosa.bu-hub.rhxm.p3.openshiftapps.com/api/controller/v2" # <--- PUT YOUR CONFIRMED URL HERE
+    # --- Resource Names ---
+    cred_type_name: "Kubernetes Kubeconfig"
+    cred_name: "ACM Hub"
+    org_name: "Default"
+    project_name: "ACM Ansible Collection Demo"
+    inventory_name: "ACM Cluster Inventory"
+    inv_source_name: "ACM Dynamic Cluster Inventory Example"
+    job_template_name: "K8S MultiCluster Management Demo"
+
+    # --- Credential Type Body ---
+    cred_type_body:
+      name: "{{ cred_type_name }}"
+      description: "Kubeconfig"
+      kind: cloud
+      inputs:
+        fields:
+          - id: kube_config
+            label: kubeconfig
+            type: string
+            multiline: true
+            secret: true
+        required:
+          - kube_config
+      injectors:
+        env:
+          K8S_AUTH_KUBECONFIG: "{% raw %}{{ tower.filename.kubeconfig }}{% endraw %}"
+        file:
+          template.kubeconfig: "{% raw %}{{ kube_config }}{% endraw %}"
+
+    # --- Common Headers ---
+    auth_headers:
+      Authorization: "Bearer {{ aap_token }}"
+
+  tasks:
+
+    - name: Fail if environment variables are not set
+      ansible.builtin.fail:
+        msg: "Please set CONTROLLER_HOST, CONTROLLER_TOKEN, and K8S_AUTH_KUBECONFIG environment variables."
+      when: not aap_host or not aap_token or not kubeconfig_path
+
+    # ============================================
+    # 0. Get Default Organization ID
+    # ============================================
+    - name: "Get '{{ org_name }}' Organization ID"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/organizations/?name={{ org_name | urlencode }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: org_lookup
+      failed_when: org_lookup.json.count == 0
+      changed_when: false
+
+    - name: Set Organization ID
+      ansible.builtin.set_fact:
+        organization_id: "{{ org_lookup.json.results[0].id }}"
+
+    # ============================================
+    # 1. Create Credential Type
+    # ============================================
+    - name: "Check if Credential Type '{{ cred_type_name }}' exists"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/credential_types/?name={{ cred_type_name | urlencode }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: check_cred_type
+      ignore_errors: true
+
+    - name: "Create Credential Type '{{ cred_type_name }}' if it does not exist"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/credential_types/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body: "{{ cred_type_body }}"
+        validate_certs: false
+        status_code: 201
+      register: create_cred_type
+      # *** FIXED *** Check if failed OR if succeeded but count is 0
+      when: check_cred_type.failed or (check_cred_type.status == 200 and check_cred_type.json.count == 0)
+
+    - name: "Get Credential Type ID"
+      ansible.builtin.set_fact:
+        cred_type_id: "{{ (check_cred_type.json.results | default([{}]))[0].id | default(create_cred_type.json.id | default(none)) }}"
+      when: not check_cred_type.failed or create_cred_type.changed
+
+    - name: "Fail if Credential Type ID not found"
+      ansible.builtin.fail:
+        msg: "Could not determine Credential Type ID for '{{ cred_type_name }}'."
+      when: cred_type_id is none
+
+    # ============================================
+    # 2. Create 'ACM Hub' Credential
+    # ============================================
+    - name: "Generate minified kubeconfig"
+      ansible.builtin.shell:
+        cmd: "kubectl config view --raw=true --minify=true --kubeconfig={{ kubeconfig_path }}"
+      register: kubeconfig
+      changed_when: false
+
+    - name: "Check if Credential '{{ cred_name }}' exists"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/credentials/?name={{ cred_name | urlencode }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: check_cred
+      ignore_errors: true
+
+    - name: "Create '{{ cred_name }}' Credential"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/credentials/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body:
+          name: "{{ cred_name }}"
+          organization: "{{ organization_id }}"
+          credential_type: "{{ cred_type_id }}"
+          inputs:
+            kube_config: "{{ kubeconfig.stdout }}"
+        validate_certs: false
+        status_code: 201
+      register: create_cred
+      # *** FIXED ***
+      when: check_cred.failed or (check_cred.status == 200 and check_cred.json.count == 0)
+
+    - name: "Get Credential ID"
+      ansible.builtin.set_fact:
+        credential_id: "{{ (check_cred.json.results | default([{}]))[0].id | default(create_cred.json.id | default(none)) }}"
+      when: not check_cred.failed or create_cred.changed
+
+    - name: "Fail if Credential ID not found"
+      ansible.builtin.fail:
+        msg: "Could not determine Credential ID for '{{ cred_name }}'."
+      when: credential_id is none
+
+    # ============================================
+    # 3. Create Project
+    # ============================================
+    - name: "Get current GIT repo origin URL"
+      ansible.builtin.shell: "git config --get remote.origin.url"
+      register: repo_url
+      changed_when: false
+
+    - name: "Get current GIT branch name"
+      ansible.builtin.shell: "git rev-parse --abbrev-ref HEAD"
+      register: branch_name
+      changed_when: false
+
+    - name: "Check if Project '{{ project_name }}' exists"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/projects/?name={{ project_name | urlencode }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: check_project
+      ignore_errors: true
+
+    - name: "Create '{{ project_name }}' Project"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/projects/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body:
+          name: "{{ project_name }}"
+          organization: "{{ organization_id }}"
+          scm_type: "git"
+          scm_url: "{{ repo_url.stdout }}"
+          scm_branch: "{{ branch_name.stdout }}"
+          scm_update_on_launch: true
+        validate_certs: false
+        status_code: 201
+      register: create_project
+      # *** FIXED ***
+      when: check_project.failed or (check_project.status == 200 and check_project.json.count == 0)
+
+    - name: "Get Project ID"
+      ansible.builtin.set_fact:
+        project_id: "{{ (check_project.json.results | default([{}]))[0].id | default(create_project.json.id | default(none)) }}"
+      when: not check_project.failed or create_project.changed
+
+    - name: "Fail if Project ID not found"
+      ansible.builtin.fail:
+        msg: "Could not determine Project ID for '{{ project_name }}'."
+      when: project_id is none
+
+    # ============================================
+    # 4. Create Inventory and Source  <-- THIS IS WHERE YOUR ERRORS WERE
+    # ============================================
+    - name: "Check if Inventory '{{ inventory_name }}' exists"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/inventories/?name={{ inventory_name | urlencode }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: check_inventory
+      ignore_errors: true
+
+    - name: "Create '{{ inventory_name }}' Inventory"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/inventories/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body:
+          name: "{{ inventory_name }}"
+          organization: "{{ organization_id }}"
+        validate_certs: false
+        status_code: 201
+      register: create_inventory
+      # *** FIXED ***
+      when: check_inventory.failed or (check_inventory.status == 200 and check_inventory.json.count == 0)
+
+    - name: "Get Inventory ID"
+      ansible.builtin.set_fact:
+        inventory_id: "{{ (check_inventory.json.results | default([{}]))[0].id | default(create_inventory.json.id | default(none)) }}"
+      when: not check_inventory.failed or create_inventory.changed
+
+    - name: "Fail if Inventory ID not found" # <-- ADDED CHECK to prevent undefined var later
+      ansible.builtin.fail:
+        msg: "Could not determine Inventory ID for '{{ inventory_name }}'. This is required for the Inventory Source."
+      when: inventory_id is none
+
+    # --- NOW these tasks should work ---
+    - name: "Check if Inventory Source '{{ inv_source_name }}' exists"
+      ansible.builtin.uri:
+        # inventory_id should now be defined, so this won't cause an "undefined variable" error
+        url: "{{ api_base }}/inventory_sources/?name={{ inv_source_name | urlencode }}&inventory={{ inventory_id }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: check_inv_source
+      ignore_errors: true
+
+    - name: "Create '{{ inv_source_name }}' Inventory Source"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/inventory_sources/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body:
+          name: "{{ inv_source_name }}"
+          inventory: "{{ inventory_id }}"
+          credential: "{{ credential_id }}"
+          source: "scm"
+          source_project: "{{ project_id }}"
+          source_path: "inventories/cluster-inventory-example.yml"
+          update_on_launch: true
+          overwrite: true
+        validate_certs: false
+        status_code: 201
+      # *** FIXED *** This `when` condition will now work because either:
+      # 1. The check above succeeds and `check_inv_source` has `.status` and `.json`.
+      # 2. The check above fails (e.g., 404), so `check_inv_source.failed` is true.
+      when: check_inv_source.failed or (check_inv_source.status == 200 and check_inv_source.json.count == 0)
+
+    # ============================================
+    # 5. Create Job Template
+    # ============================================
+    - name: "Check if Job Template '{{ job_template_name }}' exists"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/job_templates/?name={{ job_template_name | urlencode }}"
+        method: GET
+        headers: "{{ auth_headers }}"
+        validate_certs: false
+        status_code: 200
+      register: check_jt
+      ignore_errors: true
+
+    - name: "Create '{{ job_template_name }}' Job Template"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/job_templates/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body:
+          name: "{{ job_template_name }}"
+          job_type: "run"
+          organization: "{{ organization_id }}"
+          inventory: "{{ inventory_id }}" # Ensure inventory_id is set
+          project: "{{ project_id }}" # Ensure project_id is set
+          playbook: "playbooks/cluster-mgmt.yml"
+          extra_vars: "{{ {'target_hosts': 'all-managed-clusters', 'state': 'present', 'namespace': 'cool-app'} | to_json }}"
+          ask_variables_on_launch: yes
+        validate_certs: false
+        status_code: 201
+      register: create_jt
+      # *** FIXED ***
+      when: check_jt.failed or (check_jt.status == 200 and check_jt.json.count == 0)
+
+    - name: "Get Job Template ID"
+      ansible.builtin.set_fact:
+        job_template_id: "{{ (check_jt.json.results | default([{}]))[0].id | default(create_jt.json.id | default(none)) }}"
+      when: not check_jt.failed or create_jt.changed
+
+    - name: "Fail if Job Template ID not found"
+      ansible.builtin.fail:
+        msg: "Could not determine Job Template ID for '{{ job_template_name }}'."
+      when: job_template_id is none
+
+
+    - name: "Debug before associating credential" # <-- ADD THIS BLOCK
+      ansible.builtin.debug:
+        msg:
+          - "Job Template ID: {{ job_template_id }}"
+          - "Credential ID Value: {{ credential_id }}"
+          - "Credential ID Type: {{ credential_id | type_debug }}"
+          - "Credential ID as Int: {{ credential_id | int }}"
+          - "Body to be sent: {{ {'id': (credential_id | int)} }}"
+
+ 
+    # ... (tasks after) ...
+    - name: "Associate Credential with Job Template"
+      ansible.builtin.uri:
+        url: "{{ api_base }}/job_templates/{{ job_template_id }}/credentials/"
+        method: POST
+        headers: "{{ auth_headers }}"
+        body_format: json
+        body:
+          "{{ { 'id': (credential_id | int) } }}"
+        validate_certs: false
+        status_code: [200, 201, 204] # 201=Created, 204=No Content (OK), 200=OK
+      ignore_errors: true # Ignore if it's already associated (might return 400)
+
+    - name: "Finished!"
+      ansible.builtin.debug:
+        msg: "AAP resources configured via URI."
+
+# ============================================
+# NEW PLAY: Manage Clusters
+# ============================================
+- name: "Manage Clusters" # FIXED: Moved to its own play
+  hosts: "{{ target_hosts | default('none') }}" # Added default to prevent errors if not defined
+  connection: local
+  gather_facts: false
+  vars:
+    # --- Look up environment variables ---
+    kubeconfig_path: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}"
+
+  tasks:
+    - block:
+        - name: Get temp K8S access # Added names for clarity
+          ansible.builtin.include_tasks: ../roles/k8s-cluster-access/tasks/get-temp-access.yml
+          vars:
+            rbac_template: ../k8s-rbac/namespace-mgmt
+            serviceaccount_generate_name: "cluster-mgmt-"
+            ttl: 60
+
+        - name: Create K8S namespace # Added names for clarity
+          ansible.builtin.include_role:
+            name: ../roles/create-namespace
+          vars:
+            namespace_name: "{{ namespace }}"
+            state: "{{ state }}"
+
+      always:
+        - name: Remove temp K8S access # Added names for clarity
+          ansible.builtin.include_tasks: ../roles/k8s-cluster-access/tasks/remove-access.yml
+          ignore_errors: true
