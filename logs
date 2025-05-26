@@ -1,0 +1,147 @@
+ansible-playbook playbooks/aap-demo-setup.yml -i inventories/cluster-inventory-example.yml -e target_hosts=all-managed-clusters -e state=present -e namespace=cool-app
+[WARNING]: Invalid characters were found in group names but not replaced, use -vvvv to see details
+[WARNING]: While constructing a mapping from /home/cstark/ansibledev/acm-ansible-collection-demo/playbooks/aap-demo-setup.yml, line 8, column 5, found a duplicate dict key (api_base).
+Using last defined value only.
+[WARNING]: Found variable using reserved name: namespace
+
+PLAY [Setup AAP Demo Resources via URI] *************************************************************************************************************************************************
+
+TASK [Fail if environment variables are not set] ****************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get 'Default' Organization ID] ****************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Set Organization ID] **************************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Check if Credential Type 'Kubernetes Kubeconfig' exists] **************************************************************************************************************************
+ok: [localhost]
+
+TASK [Create Credential Type 'Kubernetes Kubeconfig' if it does not exist] **************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get Credential Type ID] ***********************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Fail if Credential Type ID not found] *********************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Generate minified kubeconfig] *****************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Check if Credential 'ACM Hub' exists] *********************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Create 'ACM Hub' Credential] ******************************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get Credential ID] ****************************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Fail if Credential ID not found] **************************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get current GIT repo origin URL] **************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Get current GIT branch name] ******************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Check if Project 'ACM Ansible Collection Demo' exists] ****************************************************************************************************************************
+ok: [localhost]
+
+TASK [Create 'ACM Ansible Collection Demo' Project] *************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get Project ID] *******************************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Fail if Project ID not found] *****************************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Check if Inventory 'ACM Cluster Inventory' exists] ********************************************************************************************************************************
+ok: [localhost]
+
+TASK [Create 'ACM Cluster Inventory' Inventory] *****************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get Inventory ID] *****************************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Fail if Inventory ID not found] ***************************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Check if Inventory Source 'ACM Dynamic Cluster Inventory Example' exists] *********************************************************************************************************
+ok: [localhost]
+
+TASK [Create 'ACM Dynamic Cluster Inventory Example' Inventory Source] ******************************************************************************************************************
+skipping: [localhost]
+
+TASK [Check if Job Template 'K8S MultiCluster Management Demo' exists] ******************************************************************************************************************
+ok: [localhost]
+
+TASK [Create 'K8S MultiCluster Management Demo' Job Template] ***************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Get Job Template ID] **************************************************************************************************************************************************************
+ok: [localhost]
+
+TASK [Fail if Job Template ID not found] ************************************************************************************************************************************************
+skipping: [localhost]
+
+TASK [Debug before associating credential] **********************************************************************************************************************************************
+ok: [localhost] => {
+    "msg": [
+        "Job Template ID: 21",
+        "Credential ID Value: 3",
+        "Credential ID Type: AnsibleUnsafeText",
+        "Credential ID as Int: 3",
+        "Body to be sent: {'id': 3}"
+    ]
+}
+
+TASK [Associate Credential with Job Template] *******************************************************************************************************************************************
+fatal: [localhost]: FAILED! => {"access_control_expose_headers": "X-API-Request-Id", "allow": "GET, POST, HEAD, OPTIONS", "changed": false, "connection": "close", "content_language": "en", "content_length": "69", "content_type": "application/json", "date": "Mon, 26 May 2025 12:20:13 GMT", "elapsed": 0, "json": {"error": "Cannot assign multiple Kubernetes Kubeconfig credentials."}, "msg": "Status code was 400 and not [200, 201, 204]: HTTP Error 400: Bad Request", "redirected": false, "server": "envoy", "set_cookie": "d567841bcb8408ad13d44e5c2294cc00=a9a6fcda01ec2e498c3d18e70b459416; path=/; HttpOnly; Secure; SameSite=None", "status": 400, "url": "https://aap-25-bu-aap.apps.rosa.bu-hub.rhxm.p3.openshiftapps.com/api/controller/v2/job_templates/21/credentials/", "vary": "Accept, Accept-Language, origin, Cookie", "x_api_node": "aap-25-bu-controller-web-79dd74b56d-5fjdj", "x_api_product_name": "Red Hat Ansible Automation Platform", "x_api_product_version": "4.6.12", "x_api_request_id": "58c0afbb638e4d8f865118df7752d721", "x_api_time": "0.017s", "x_api_total_time": "0.041s", "x_envoy_upstream_service_time": "42"}
+...ignoring
+
+TASK [Finished!] ************************************************************************************************************************************************************************
+ok: [localhost] => {
+    "msg": "AAP resources configured via URI."
+}
+
+PLAY [Manage Clusters] ******************************************************************************************************************************************************************
+
+TASK [Get temp K8S access] **************************************************************************************************************************************************************
+included: /home/cstark/ansibledev/acm-ansible-collection-demo/roles/k8s-cluster-access/tasks/get-temp-access.yml for boston
+
+TASK [Enabled cluster-proxy addon] ******************************************************************************************************************************************************
+ok: [boston]
+
+TASK [Enabled managed-serviceaccount addon] *********************************************************************************************************************************************
+ok: [boston]
+
+TASK [Get ClusterProxy URL] *************************************************************************************************************************************************************
+ok: [boston]
+
+TASK [Get managed ServiceAccount token for dynamic ServiceAccount] **********************************************************************************************************************
+changed: [boston]
+
+TASK [Configure ServiceAccount RBAC] ****************************************************************************************************************************************************
+ok: [boston]
+
+TASK [Create K8S namespace] *************************************************************************************************************************************************************
+included: ../roles/create-namespace for boston
+
+TASK [../roles/create-namespace : Creating namespace cool-app] **************************************************************************************************************************
+ok: [boston]
+
+TASK [Remove temp K8S access] ***********************************************************************************************************************************************************
+included: /home/cstark/ansibledev/acm-ansible-collection-demo/roles/k8s-cluster-access/tasks/remove-access.yml for boston
+
+TASK [Removing managed ServiceAccount] **************************************************************************************************************************************************
+changed: [boston]
+
+PLAY RECAP ******************************************************************************************************************************************************************************
+boston                     : ok=10   changed=2    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+localhost                  : ok=19   changed=0    unreachable=0    failed=0    skipped=12   rescued=0    ignored=1   
