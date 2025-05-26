@@ -1,0 +1,5 @@
+plugin: stolostron.core.ocm_managedcluster
+cluster_groups:
+- name: all-managed-clusters
+  label_selectors:
+  - ansiblecstark=true
